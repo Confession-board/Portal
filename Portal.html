@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hand Portal</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; padding: 0; background-color: #000; overflow: hidden; font-family: monospace; }
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; }
+        video { display: none; }
+        canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        
+        /* Overlays */
+        #flash-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: white; opacity: 0; pointer-events: none; z-index: 200;
+            transition: opacity 0.2s ease-out;
+        }
+
+        #countdown-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 100px; font-weight: bold; color: #ff00ff;
+            text-shadow: 0 0 20px #ff00ff, 0 0 40px #ffffff;
+            z-index: 150; pointer-events: none; display: none;
+        }
+
+        #start-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.95); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100; color: #fff; text-align: center;
+            padding: 20px;
+        }
+        #start-btn {
+            padding: 16px 32px; font-size: 18px; font-weight: bold; background: #ff00ff;
+            color: #fff; border: none; border-radius: 30px; box-shadow: 0 0 15px #ff00ff;
+            cursor: pointer; margin-top: 20px; font-family: monospace;
+        }
+        
+        /* UI Status Bar */
+        #ui-bar {
+            position: absolute; top: 15px; left: 15px; right: 15px;
+            display: flex; justify-content: space-between; align-items: center;
+            z-index: 10; pointer-events: none;
+        }
+        #status-container { display: flex; flex-direction: column; gap: 4px; }
+        #status {
+            color: #ff00ff; font-size: 13px; text-shadow: 0 0 8px #ff00ff;
+            background: rgba(0, 0, 0, 0.75); padding: 8px 12px; border-radius: 8px;
+        }
+        #gesture-status {
+            color: #00ffff; font-size: 11px; text-shadow: 0 0 6px #00ffff;
+            background: rgba(0, 0, 0, 0.75); padding: 4px 8px; border-radius: 6px; width: fit-content;
+        }
+
+        /* Color Controls */
+        .color-picker {
+            display: flex; gap: 8px; pointer-events: auto;
+            background: rgba(0, 0, 0, 0.75); padding: 6px 10px; border-radius: 20px;
+        }
+        .color-btn {
+            width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff;
+            cursor: pointer; transition: transform 0.2s;
+        }
+        .color-btn:active { transform: scale(1.2); }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="flash-overlay"></div>
+        <div id="countdown-overlay">2</div>
+
+        <div id="ui-bar">
+            <div id="status-container">
+                <div id="status">🟣 INITIALIZING TRACKING...</div>
+                <div id="gesture-status">👁️ BLINK = SHOT (2s) | 🤌 PINCH = CHANGE COLOR</div>
+            </div>
+            <div class="color-picker">
+                <div class="color-btn" style="background: #ff00ff;" onclick="setTheme('neon')"></div>
+                <div class="color-btn" style="background: #8a2be2;" onclick="setTheme('deep')"></div>
+                <div class="color-btn" style="background: #e0b0ff;" onclick="setTheme('lavender')"></div>
+                <div class="color-btn" style="background: #4b0082;" onclick="setTheme('indigo')"></div>
+            </div>
+        </div>
+
+        <div id="start-overlay">
+            <h2>Hand Portal</h2>
+            <p>• Touch <b>Thumb & Index fingertips</b> together to open portal<br>• <b>Blink eyes</b> to trigger 2s photo countdown<br>• <b>Pinch thumb + index</b> on one hand to cycle color</p>
+            <button id="start-btn">START CAMERA</button>
+        </div>
+
+        <video id="webcam" playsinline autoplay muted></video>
+        <canvas id="output_canvas"></canvas>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const startOverlay = document.getElementById('start-overlay');
+        const startBtn = document.getElementById('start-btn');
+        const statusElem = document.getElementById('status');
+        const gestureStatusElem = document.getElementById('gesture-status');
+        const flashOverlay = document.getElementById('flash-overlay');
+        const countdownOverlay = document.getElementById('countdown-overlay');
+
+        // Theme Definitions
+        const themeKeys = ['neon', 'deep', 'lavender', 'indigo'];
+        let currentThemeIdx = 0;
+
+        const themes = {
+            neon:     { stroke: 'rgba(255, 0, 255, 0.9)',   fill: 'rgba(255, 0, 255, 0.35)',  glow: '#ff00ff', name: 'ELECTRIC NEON' },
+            deep:     { stroke: 'rgba(138, 43, 226, 0.9)',  fill: 'rgba(138, 43, 226, 0.35)', glow: '#8a2be2', name: 'DEEP CYBER' },
+            lavender: { stroke: 'rgba(224, 176, 255, 0.9)', fill: 'rgba(224, 176, 255, 0.35)', glow: '#e0b0ff', name: 'SOFT LAVENDER' },
+            indigo:   { stroke: 'rgba(75, 0, 130, 0.9)',    fill: 'rgba(75, 0, 130, 0.45)',   glow: '#4b0082', name: 'COSMIC INDIGO' }
+        };
+        let currentTheme = themes.neon;
+
+        let isCountdownRunning = false;
+        let lastThemeChangeTime = 0;
+
+        function setTheme(key) {
+            currentTheme = themes[key];
+            currentThemeIdx = themeKeys.indexOf(key);
+            statusElem.style.color = currentTheme.glow;
+            statusElem.style.textShadow = `0 0 8px ${currentTheme.glow}`;
+        }
+
+        function cycleTheme() {
+            const now = Date.now();
+            if (now - lastThemeChangeTime < 1500) return; // Cooldown 1.5s
+            lastThemeChangeTime = now;
+
+            currentThemeIdx = (currentThemeIdx + 1) % themeKeys.length;
+            setTheme(themeKeys[currentThemeIdx]);
+            gestureStatusElem.innerText = `🎨 COLOR: ${currentTheme.name}`;
+            setTimeout(() => {
+                gestureStatusElem.innerText = '👁️ BLINK = SHOT (2s) | 🤌 PINCH = CHANGE COLOR';
+            }, 2000);
+        }
+
+        function triggerCountdownCapture() {
+            if (isCountdownRunning) return;
+            isCountdownRunning = true;
+
+            let count = 2;
+            countdownOverlay.innerText = count;
+            countdownOverlay.style.display = 'block';
+            gestureStatusElem.innerText = "📸 BLINK DETECTED! GET READY...";
+
+            const timer = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    countdownOverlay.innerText = count;
+                } else {
+                    clearInterval(timer);
+                    countdownOverlay.style.display = 'none';
+                    takeSnapshot();
+                    isCountdownRunning = false;
+                }
+            }, 1000);
+        }
+
+        function takeSnapshot() {
+            flashOverlay.style.opacity = '1';
+            setTimeout(() => { flashOverlay.style.opacity = '0'; }, 200);
+
+            gestureStatusElem.innerText = "📸 PHOTO CAPTURED!";
+
+            const image = canvasElement.toDataURL("image/png");
+            const link = document.createElement('a');
+            link.download = `hand-portal-${Date.now()}.png`;
+            link.href = image;
+            link.click();
+
+            setTimeout(() => {
+                gestureStatusElem.innerText = '👁️ BLINK = SHOT (2s) | 🤌 PINCH = CHANGE COLOR';
+            }, 2500);
+        }
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 1. Initialize FaceMesh
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults((results) => {
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const face = results.multiFaceLandmarks[0];
+
+                // Calculate Eye Aspect Ratio (EAR) for stable blink detection
+                const rVertical = Math.hypot(face[159].x - face[145].x, face[159].y - face[145].y);
+                const rHorizontal = Math.hypot(face[33].x - face[133].x, face[33].y - face[133].y);
+                const rightEAR = rVertical / (rHorizontal + 1e-6);
+
+                const lVertical = Math.hypot(face[386].x - face[374].x, face[386].y - face[374].y);
+                const lHorizontal = Math.hypot(face[362].x - face[263].x, face[362].y - face[263].y);
+                const leftEAR = lVertical / (lHorizontal + 1e-6);
+
+                if (rightEAR < 0.18 && leftEAR < 0.18) {
+                    triggerCountdownCapture();
+                }
+            }
+        });
+
+        // 2. Initialize MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 0,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        // Only Thumb (4) and Index (8)
+        const THUMB_TIP = 4;
+        const INDEX_TIP = 8;
+
+        hands.onResults((results) => {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FFFFFF', lineWidth: 1, radius: 2});
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#FFFFFF', lineWidth: 1});
+
+                    // Pinch Gesture to Change Color (Thumb tip 4 & Index tip 8 on single hand)
+                    const pinchDist = Math.hypot(landmarks[4].x - landmarks[8].x, landmarks[4].y - landmarks[8].y);
+                    if (pinchDist < 0.045) {
+                        cycleTheme();
+                    }
+                }
+
+                // Thumb + Index Portal Connection Logic
+                if (results.multiHandLandmarks.length === 2) {
+                    const hand1 = results.multiHandLandmarks[0];
+                    const hand2 = results.multiHandLandmarks[1];
+                    const w = canvasElement.width;
+                    const h = canvasElement.height;
+
+                    // Extract Thumb and Index Coordinates
+                    const h1_idx = { x: hand1[INDEX_TIP].x * w, y: hand1[INDEX_TIP].y * h };
+                    const h1_thb = { x: hand1[THUMB_TIP].x * w, y: hand1[THUMB_TIP].y * h };
+                    const h2_idx = { x: hand2[INDEX_TIP].x * w, y: hand2[INDEX_TIP].y * h };
+                    const h2_thb = { x: hand2[THUMB_TIP].x * w, y: hand2[THUMB_TIP].y * h };
+
+                    // Proximity check between hand tips (Normalized coordinates)
+                    const dist1 = Math.hypot(hand1[INDEX_TIP].x - hand2[INDEX_TIP].x, hand1[INDEX_TIP].y - hand2[INDEX_TIP].y);
+                    const dist2 = Math.hypot(hand1[THUMB_TIP].x - hand2[THUMB_TIP].x, hand1[THUMB_TIP].y - hand2[THUMB_TIP].y);
+                    const distCross1 = Math.hypot(hand1[INDEX_TIP].x - hand2[THUMB_TIP].x, hand1[INDEX_TIP].y - hand2[THUMB_TIP].y);
+                    const distCross2 = Math.hypot(hand1[THUMB_TIP].x - hand2[INDEX_TIP].x, hand1[THUMB_TIP].y - hand2[INDEX_TIP].y);
+
+                    const CONTACT_THRESHOLD = 0.18; // Max distance allowed to open portal
+
+                    const isConnected = (dist1 < CONTACT_THRESHOLD && dist2 < CONTACT_THRESHOLD) ||
+                                        (distCross1 < CONTACT_THRESHOLD && distCross2 < CONTACT_THRESHOLD);
+
+                    if (isConnected) {
+                        statusElem.innerText = `🟣 PORTAL ACTIVE (${currentTheme.name})`;
+
+                        // Draw 4-point portal geometry (H1 Index -> H2 Index -> H2 Thumb -> H1 Thumb)
+                        canvasCtx.beginPath();
+                        canvasCtx.moveTo(h1_idx.x, h1_idx.y);
+                        canvasCtx.lineTo(h2_idx.x, h2_idx.y);
+                        canvasCtx.lineTo(h2_thb.x, h2_thb.y);
+                        canvasCtx.lineTo(h1_thb.x, h1_thb.y);
+                        canvasCtx.closePath();
+
+                        // Render Portal Visuals
+                        canvasCtx.fillStyle = currentTheme.fill;
+                        canvasCtx.fill();
+
+                        canvasCtx.strokeStyle = currentTheme.stroke;
+                        canvasCtx.lineWidth = 6;
+                        canvasCtx.stroke();
+
+                        canvasCtx.strokeStyle = '#FFFFFF';
+                        canvasCtx.lineWidth = 2;
+                        canvasCtx.stroke();
+                    } else {
+                        statusElem.innerText = "👉 TOUCH THUMB & INDEX FINGERS TO CONNECT";
+                    }
+                } else {
+                    statusElem.innerText = "🟣 BRING 2 HANDS TO FRAME";
+                }
+            } else {
+                statusElem.innerText = "🟣 READY - SHOW HANDS";
+            }
+            canvasCtx.restore();
+        });
+
+        // Frame loop lock
+        let isProcessing = false;
+
+        async function processVideo() {
+            if (!videoElement.paused && !videoElement.ended && !isProcessing) {
+                isProcessing = true;
+                try {
+                    await hands.send({ image: videoElement });
+                    await faceMesh.send({ image: videoElement });
+                } catch(e) {
+                    console.error("Frame process error:", e);
+                }
+                isProcessing = false;
+            }
+            requestAnimationFrame(processVideo);
+        }
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                videoElement.srcObject = stream;
+                await videoElement.play();
+                startOverlay.style.display = 'none';
+                processVideo();
+            } catch (err) {
+                alert('Camera permission required: ' + err.message);
+            }
+        });
+    </script>
+</body>
+</html>
