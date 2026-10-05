@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Hand Portal</title>
+    <title>Thumb & Index Unlimited Range Portal</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -90,8 +90,8 @@
         </div>
 
         <div id="start-overlay">
-            <h2>Hand Portal</h2>
-            <p>• Touch <b>Thumb & Index fingertips</b> together to open portal<br>• <b>Blink eyes</b> to trigger 2s photo countdown<br>• <b>Pinch thumb + index</b> on one hand to cycle color</p>
+            <h2>Thumb & Index Unlimited Portal</h2>
+            <p>• Portal connects <b>Thumb & Index</b> across <b>ANY DISTANCE</b> (no proximity limit)<br>• <b>Blink eyes</b> for 2s photo countdown<br>• <b>Pinch thumb + index</b> on one hand to cycle color</p>
             <button id="start-btn">START CAMERA</button>
         </div>
 
@@ -207,7 +207,6 @@
             if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
                 const face = results.multiFaceLandmarks[0];
 
-                // Calculate Eye Aspect Ratio (EAR) for stable blink detection
                 const rVertical = Math.hypot(face[159].x - face[145].x, face[159].y - face[145].y);
                 const rHorizontal = Math.hypot(face[33].x - face[133].x, face[33].y - face[133].y);
                 const rightEAR = rVertical / (rHorizontal + 1e-6);
@@ -234,7 +233,6 @@
             minTrackingConfidence: 0.5
         });
 
-        // Only Thumb (4) and Index (8)
         const THUMB_TIP = 4;
         const INDEX_TIP = 8;
 
@@ -255,55 +253,42 @@
                     }
                 }
 
-                // Thumb + Index Portal Connection Logic
+                // Connect Thumb & Index with NO proximity range restriction
                 if (results.multiHandLandmarks.length === 2) {
                     const hand1 = results.multiHandLandmarks[0];
                     const hand2 = results.multiHandLandmarks[1];
                     const w = canvasElement.width;
                     const h = canvasElement.height;
 
-                    // Extract Thumb and Index Coordinates
+                    // Extract Thumb and Index Coordinates for both hands
                     const h1_idx = { x: hand1[INDEX_TIP].x * w, y: hand1[INDEX_TIP].y * h };
                     const h1_thb = { x: hand1[THUMB_TIP].x * w, y: hand1[THUMB_TIP].y * h };
                     const h2_idx = { x: hand2[INDEX_TIP].x * w, y: hand2[INDEX_TIP].y * h };
                     const h2_thb = { x: hand2[THUMB_TIP].x * w, y: hand2[THUMB_TIP].y * h };
 
-                    // Proximity check between hand tips (Normalized coordinates)
-                    const dist1 = Math.hypot(hand1[INDEX_TIP].x - hand2[INDEX_TIP].x, hand1[INDEX_TIP].y - hand2[INDEX_TIP].y);
-                    const dist2 = Math.hypot(hand1[THUMB_TIP].x - hand2[THUMB_TIP].x, hand1[THUMB_TIP].y - hand2[THUMB_TIP].y);
-                    const distCross1 = Math.hypot(hand1[INDEX_TIP].x - hand2[THUMB_TIP].x, hand1[INDEX_TIP].y - hand2[THUMB_TIP].y);
-                    const distCross2 = Math.hypot(hand1[THUMB_TIP].x - hand2[INDEX_TIP].x, hand1[THUMB_TIP].y - hand2[INDEX_TIP].y);
+                    statusElem.innerText = `🟣 PORTAL ACTIVE (${currentTheme.name})`;
 
-                    const CONTACT_THRESHOLD = 0.18; // Max distance allowed to open portal
+                    // Render 4-point beam portal across any screen distance
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(h1_idx.x, h1_idx.y);
+                    canvasCtx.lineTo(h2_idx.x, h2_idx.y);
+                    canvasCtx.lineTo(h2_thb.x, h2_thb.y);
+                    canvasCtx.lineTo(h1_thb.x, h1_thb.y);
+                    canvasCtx.closePath();
 
-                    const isConnected = (dist1 < CONTACT_THRESHOLD && dist2 < CONTACT_THRESHOLD) ||
-                                        (distCross1 < CONTACT_THRESHOLD && distCross2 < CONTACT_THRESHOLD);
+                    // Fill and Stroke Portal Outer Glow
+                    canvasCtx.fillStyle = currentTheme.fill;
+                    canvasCtx.fill();
 
-                    if (isConnected) {
-                        statusElem.innerText = `🟣 PORTAL ACTIVE (${currentTheme.name})`;
+                    canvasCtx.strokeStyle = currentTheme.stroke;
+                    canvasCtx.lineWidth = 6;
+                    canvasCtx.stroke();
 
-                        // Draw 4-point portal geometry (H1 Index -> H2 Index -> H2 Thumb -> H1 Thumb)
-                        canvasCtx.beginPath();
-                        canvasCtx.moveTo(h1_idx.x, h1_idx.y);
-                        canvasCtx.lineTo(h2_idx.x, h2_idx.y);
-                        canvasCtx.lineTo(h2_thb.x, h2_thb.y);
-                        canvasCtx.lineTo(h1_thb.x, h1_thb.y);
-                        canvasCtx.closePath();
+                    // Inner White Beam Core
+                    canvasCtx.strokeStyle = '#FFFFFF';
+                    canvasCtx.lineWidth = 2;
+                    canvasCtx.stroke();
 
-                        // Render Portal Visuals
-                        canvasCtx.fillStyle = currentTheme.fill;
-                        canvasCtx.fill();
-
-                        canvasCtx.strokeStyle = currentTheme.stroke;
-                        canvasCtx.lineWidth = 6;
-                        canvasCtx.stroke();
-
-                        canvasCtx.strokeStyle = '#FFFFFF';
-                        canvasCtx.lineWidth = 2;
-                        canvasCtx.stroke();
-                    } else {
-                        statusElem.innerText = "👉 TOUCH THUMB & INDEX FINGERS TO CONNECT";
-                    }
                 } else {
                     statusElem.innerText = "🟣 BRING 2 HANDS TO FRAME";
                 }
